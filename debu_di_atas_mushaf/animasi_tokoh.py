@@ -45,11 +45,21 @@ def pose(root, f, dx=0, dy=0, dz=0, rx=0, ry=0, rz=0, s=(1, 1, 1)):
     kunci(root, "rotation_euler", f, Vector((R(rx), R(ry), R(rzd + rz))))
     kunci(root, "scale", f, Vector(s))
 
+MULUT_TERAKHIR = {}
 def mulut(tokoh, f, **nilai):
-    kb = O[f"{tokoh}_mulut"].data.shape_keys.key_blocks
+    o = O.get(f"{tokoh}_mulut")
+    if not o or o.name not in vl.objects or not o.data.shape_keys:
+        return                                  # tokoh tanpa shape key mulut
+    kb = o.data.shape_keys.key_blocks
+    lalu = MULUT_TERAKHIR.get(tokoh)
+    if lalu and f - lalu[0] > 16:               # tahan ekspresi lama, lalu berganti cepat (8 frame)
+        for nama in ("senang", "kaget", "sedih"):
+            kb[nama].value = lalu[1].get(nama, 0.0)
+            kb[nama].keyframe_insert("value", frame=f - 8)
     for nama in ("senang", "kaget", "sedih"):
         kb[nama].value = nilai.get(nama, 0.0)
         kb[nama].keyframe_insert("value", frame=f)
+    MULUT_TERAKHIR[tokoh] = (f, nilai)
 
 def tampil(objs, f, muncul):
     for o in objs:
@@ -91,8 +101,8 @@ for root in TOKOH:
         if o.name.startswith(("Piko_Badan", "Piko_Jambul_Utama")):
             continue                                   # animasi bawaan teman tetap
         o.animation_data_clear()
-        if o.type == 'MESH' and o.data.shape_keys:
-            o.data.shape_keys.animation_data_clear()
+        if o.type == 'MESH' and o.data.shape_keys and o.data.shape_keys.animation_data:
+            o.data.shape_keys.animation_data.action = None    # keyframe dibuang, driver (lidah Bayu) tetap
         o.hide_viewport = o.hide_render = False
 
 # animasi bawaan Piko (1-160) diulang terus sebagai gerak idle
@@ -196,6 +206,7 @@ terbang(piko, P11 + 35, P12 - 12, JENDELA + Vector((-1, 0, 0.5)))
 WAJAH = {n: [o for o in O if o.name.startswith(f"Piko_{n}_")] for n in ("Normal", "Senang", "Kaget", "Sedih")}
 for c in bpy.data.collections["Piko_Utama"].children:     # visibilitas diatur per objek
     c.hide_render = False
+    c.hide_viewport = False                               # di file teman set wajah lain dinonaktifkan di viewport
     def cari(lc):
         if lc.name == c.name:
             return lc
@@ -268,17 +279,18 @@ mulut("Bayu", P08 + 10)
 mulut("Bayu", P09 + 60, sedih=0.5)
 mulut("Bayu", P10 + 10, kaget=1.0)
 mulut("Bayu", P11 + 30, senang=1.0)
-kilau = O["Bayu_kilau"]                                                # kilau berputar terus
-kilau.animation_data_clear()
-kunci(kilau, "rotation_euler", 1, 0.0, index=2)
-kunci(kilau, "rotation_euler", sc.frame_end, R(720), index=2)
-for fc in fcurves(kilau):
-    for k in fc.keyframe_points:
-        k.interpolation = 'LINEAR'
+kilau = O.get("Bayu_kilau")                                            # kilau berputar (Bayu versi generator)
+if kilau and kilau.name in vl.objects:
+    kilau.animation_data_clear()
+    kunci(kilau, "rotation_euler", 1, 0.0, index=2)
+    kunci(kilau, "rotation_euler", sc.frame_end, R(720), index=2)
+    for fc in fcurves(kilau):
+        for k in fc.keyframe_points:
+            k.interpolation = 'LINEAR'
 
 # semua tokoh hilang setelah terbang (sebelum panel 12)
 for root in TOKOH:
-    objs = [o for o in root.children_recursive if o.type == 'MESH' and not o.name.startswith(
+    objs = [o for o in root.children_recursive if o.type in ('MESH', 'CURVE') and not o.name.startswith(
         ("Piko_Senang_", "Piko_Kaget_", "Piko_Sedih_", "Piko_Normal_"))]
     tampil(objs, P12 - 2, False)
     if root.name != "Bayu":
