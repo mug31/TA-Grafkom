@@ -1,7 +1,8 @@
 # Animasi tokoh "Debu di Atas Mushaf" sesuai storyboard (12 panel, 24 fps, frame 1-2016).
 # Aman dijalankan ulang: animasi tokoh dibersihkan dulu, lalu dikunci ulang.
+# Butuh rig dari lengan_kanan.py dan mulut_bicara.py (jalankan keduanya dulu).
 # Jalankan: blender -b debu_di_atas_mushaf_lengkap.blend --python animasi_tokoh.py -- debu_di_atas_mushaf_lengkap.blend
-import bpy, math, os, sys
+import bpy, math, os, re, sys
 from mathutils import Vector
 
 R = math.radians
@@ -12,6 +13,7 @@ O = bpy.data.objects
 
 # ---------- panel (frame awal, dari marker) ----------
 P = {m.name: m.frame for m in sc.timeline_markers}
+FPS = sc.render.fps
 P01, P02, P03, P04, P05, P06 = P["P01"], P["P02"], P["P03"], P["P04"], P["P05"], P["P06"]
 P07, P08, P09, P10, P11, P12 = P["P07"], P["P08"], P["P09"], P["P10"], P["P11"], P["P12"]
 
@@ -84,6 +86,70 @@ def napas(root, kuat=0.025):
                 m.use_restricted_range, m.frame_start, m.frame_end = True, a, b
                 m.blend_in = m.blend_out = 10
 
+# ---------- bicara: mulut buka-tutup per suku kata (shape key "buka" dari mulut_bicara.py) ----------
+# Belum ada rekaman suara, jadi durasi diperkirakan: bahasa Indonesia santai ±5-6,5 suku kata/detik
+# + jeda tanda baca. Kalau dialog tidak muat sampai frame `akhir`, lajunya dinaikkan otomatis.
+MULUT_BUKA = {
+    "Abu": ["Abu_mulut_Rongga"],
+    "Rami": ["Rami_mulut_Rongga"],
+    "Piko": ["Piko_Normal_Mulut_1_BibirHitam", "Piko_Normal_Mulut_2_RonggaMarun", "Piko_Kaget_Mulut_1_BibirHitam",
+             "Piko_Kaget_Mulut_2_RonggaMarun", "Piko_Senang_Mulut_Rongga", "Piko_Sedih_Mulut_Rongga"],
+    "Bayu": ["Bayu_mulut"],
+}
+VOKAL = {"a": 1.0, "o": 0.8, "e": 0.7, "u": 0.55, "i": 0.5}   # seberapa lebar mulut terbuka
+JEDA = {"...": 10, ".": 7, "?": 7, "!": 7, ",": 4}           # frame mulut terkatup
+BIBIR = set("mbpw")                                          # konsonan yang mengatupkan bibir
+
+def suku_kata(teks):
+    """Teks -> [("s", vokal, bibir_katup) | ("jeda", frame)]. Diftong ai/au/oi/ei = satu suku kata."""
+    hasil = []
+    for tok in re.findall(r"\.\.\.|[.,?!]|[a-z'\-]+", teks.lower()):
+        if tok in JEDA:
+            hasil.append(("jeda", JEDA[tok]))
+            continue
+        for awal, v in re.findall(r"([^aiueo]*)(ai|au|oi|ei|[aiueo])", tok.replace("'", "").replace("-", "")):
+            hasil.append(("s", v[0], bool(BIBIR & set(awal))))
+    return hasil
+
+def buka(tokoh, f, nilai):
+    for n in MULUT_BUKA[tokoh]:
+        kb = O[n].data.shape_keys.key_blocks["buka"]
+        kb.value = nilai
+        kb.keyframe_insert("value", frame=f)
+
+def bicara(tokoh, mulai, teks, laju=5.5, akhir=None, kuat=1.0):
+    """Mulut buka-tutup mulai frame `mulai`: puncak di tengah tiap suku kata, terkatup di jeda
+    dan konsonan bibir (m/b/p/w). Kembalikan frame selesai."""
+    seg = suku_kata(teks)
+    while seg and seg[-1][0] == "jeda":                    # tanda baca penutup tidak makan waktu
+        seg.pop()
+    n = sum(1 for s in seg if s[0] == "s")
+    jeda = sum(s[1] for s in seg if s[0] == "jeda")
+    if akhir and mulai + n * FPS / laju + jeda > akhir:
+        laju = n * FPS / (akhir - mulai - jeda)
+    spf = FPS / laju                                       # frame per suku kata
+    f = float(mulai)
+    buka(tokoh, f - 2, 0.0)
+    for i, s in enumerate(seg):
+        if s[0] == "jeda":
+            buka(tokoh, f + 2, 0.0)
+            buka(tokoh, f + s[1] - 1, 0.0)
+            f += s[1]
+            continue
+        _, v, katup = s
+        buka(tokoh, f, 0.0 if katup else 0.15 * kuat)
+        buka(tokoh, f + spf * 0.5, VOKAL[v] * kuat * (0.85 + 0.15 * (i * 37 % 7) / 6))
+        f += spf
+    buka(tokoh, f + 2, 0.0)
+    print(f"BICARA {tokoh:5} {mulai}-{round(f)} ({(f - mulai) / FPS:.1f} dtk) {n} suku kata, {laju:.1f}/dtk")
+    return round(f)
+
+def menguap(tokoh, mulai, lama, nilai=1.3):
+    buka(tokoh, mulai - 2, 0.0)
+    buka(tokoh, mulai + 6, nilai * 0.8)
+    buka(tokoh, mulai + lama - 6, nilai)
+    buka(tokoh, mulai + lama, 0.0)
+
 def terbang(root, mulai, akhir, tujuan):
     """Terbang meninggalkan mushaf ke arah cahaya, mengecil, lalu hilang."""
     x, y, _ = DASAR[root.name]
@@ -115,11 +181,11 @@ for n in ("Piko_Badan", "Piko_Jambul_Utama"):
 # ABU — tertua, gerak lambat & berat
 abu = O["Abu"]
 pose(abu, 1)
-pose(abu, P03 + 30)                                       # masih tidur
-pose(abu, P03 + 50, dz=0.05, s=(0.94, 0.94, 1.12))        # menguap: meregang
-pose(abu, P03 + 80, dz=0.05, s=(0.94, 0.94, 1.12))
-pose(abu, P03 + 100, s=(1.03, 1.03, 0.97))
-pose(abu, P03 + 115)
+pose(abu, P03 + 8)                                        # masih tidur
+pose(abu, P03 + 14, dz=0.05, s=(0.94, 0.94, 1.12))        # menguap: meregang
+pose(abu, P03 + 30, dz=0.05, s=(0.94, 0.94, 1.12))
+pose(abu, P03 + 38, s=(1.03, 1.03, 0.97))
+pose(abu, P03 + 48)
 pose(abu, P05 + 15)
 pose(abu, P05 + 40, rx=-15, rz=-30)                       # menoleh ke Bayu di jendela
 pose(abu, P05 + 110, rx=-12, rz=-10)
@@ -131,8 +197,8 @@ pose(abu, P07 + 110, s=(1.04, 1.04, 1.04))
 pose(abu, P07 + 130, rx=-8, s=(1.07, 1.07, 1.07))         # "Benda paling dihormati, dong"
 pose(abu, P07 + 200, rx=-8, s=(1.07, 1.07, 1.07))
 pose(abu, P08 + 20)
-pose(abu, P09 + 100)
-pose(abu, P09 + 170, rx=22, s=(1.0, 1.0, 0.92))           # menunduk sadar
+pose(abu, P09 + 125)
+pose(abu, P09 + 150, rx=22, s=(1.0, 1.0, 0.92))           # menunduk sadar
 pose(abu, P10 + 5, rx=22, s=(1.0, 1.0, 0.92))
 pose(abu, P10 + 14, dz=0.5, s=(0.9, 0.9, 1.15))           # kaget, pintu terbuka
 pose(abu, P10 + 24, s=(1.08, 1.08, 0.9))
@@ -140,33 +206,39 @@ pose(abu, P10 + 32, rz=-20)
 pose(abu, P11 + 40, rz=-20)
 terbang(abu, P11 + 45, P12 - 4, JENDELA + Vector((1, 0, 0)))
 mulut("Abu", 1)
-mulut("Abu", P03 + 40)
-mulut("Abu", P03 + 55, kaget=1.0)                         # "Hoaam..."
-mulut("Abu", P03 + 85, kaget=1.0)
-mulut("Abu", P03 + 105, senang=0.6)                       # "...tenang kayak biasa"
+mulut("Abu", P03 + 60)
+mulut("Abu", P03 + 90, senang=0.6)                        # "...tenang kayak biasa"
 mulut("Abu", P06 + 15, senang=1.0)
 mulut("Abu", P07 + 110, senang=0.3)
 mulut("Abu", P07 + 125, senang=1.0)
 mulut("Abu", P08 + 30)
-mulut("Abu", P09 + 120)
-mulut("Abu", P09 + 170, sedih=1.0)                        # "Astaghfirullah..."
+mulut("Abu", P09 + 125)
+mulut("Abu", P09 + 145, sedih=1.0)                        # "Astaghfirullah..."
 mulut("Abu", P10 + 8, sedih=1.0)
 mulut("Abu", P10 + 14, kaget=1.0)
 mulut("Abu", P11 + 25, kaget=1.0)
-mulut("Abu", P11 + 45, senang=0.8)                        # "Alhamdulillah... akhirnya"
+mulut("Abu", P11 + 38, senang=0.8)                        # "Alhamdulillah... akhirnya"
+menguap("Abu", P03 + 10, 22)                              # "Hoaam..."
+bicara("Abu", P03 + 40, "udah pagi lagi, ya. Alhamdulillah, tenang kayak biasa.", laju=5.0, akhir=P04 - 3)
+bicara("Abu", P06 + 6, "Wa'alaikumussalam. Masuk aja! Di sini paling aman, nggak ada yang pernah nyentuh.",
+       akhir=P07 - 3)
+bicara("Abu", P07 + 116, "Ini Al-Qur'an. Benda paling dihormati di rumah ini, dong.", akhir=P08 - 3)
+bicara("Abu", P09 + 149, "Astaghfirullah... kita betah di sini justru karena Al-Qur'an ini ditinggalkan.",
+       laju=5.0, akhir=P10 + 4)
+bicara("Abu", P11 + 40, "Alhamdulillah... akhirnya.", laju=4.5, akhir=P12 - 1, kuat=0.8)
 
 # ======================================================================
 # RAMI — pencatat hari, agak cemas
 rami = O["Rami"]
 pose(rami, 1)
-pose(rami, P04 + 10)
-pose(rami, P04 + 25, dx=-0.15, rx=14)                     # condong ke goresan hitungan
-for i in range(8):                                        # menggores satu garis
-    pose(rami, P04 + 32 + i * 6, dx=-0.15 - 0.05 * (i % 2), rx=14 + 3 * (i % 2))
-pose(rami, P04 + 90, dx=-0.15, rx=14)
-pose(rami, P04 + 105)
-pose(rami, P04 + 115, dz=0.12, s=(0.97, 0.97, 1.04))      # "Hari ke-211, lho"
-pose(rami, P04 + 125)
+pose(rami, P04 + 2)
+pose(rami, P04 + 4, dx=-0.15, rx=14)                      # condong ke goresan hitungan
+for i in range(6):                                        # menggores satu garis sambil bicara
+    pose(rami, P04 + 8 + i * 6, dx=-0.15 - 0.05 * (i % 2), rx=14 + 3 * (i % 2))
+pose(rami, P04 + 40, dx=-0.15, rx=14)
+pose(rami, P04 + 44)
+pose(rami, P04 + 50, dz=0.12, s=(0.97, 0.97, 1.04))       # "Hari ke-211, lho" (±P04+47)
+pose(rami, P04 + 60)
 pose(rami, P05 + 18)
 pose(rami, P05 + 42, rx=-15, rz=-35)                      # menoleh ke jendela
 pose(rami, P05 + 110, rx=-12, rz=-15)
@@ -181,21 +253,24 @@ pose(rami, P10 + 26, s=(1.06, 1.06, 0.92))
 pose(rami, P10 + 34, rz=-20)
 pose(rami, P11 + 35, rz=-20)
 terbang(rami, P11 + 40, P12 - 8, JENDELA + Vector((0, 0, 1.2)))
+bicara("Rami", P04 + 6, "Hari ke dua ratus sebelas, lho. Terakhir dibuka pas malam dua puluh tujuh Ramadan.",
+       laju=6.5, akhir=P04 + 128)
+bicara("Rami", P09 + 88, "Ya pergi. Memang harusnya begitu.", laju=6.0, akhir=P09 + 145)
 
 # ======================================================================
 # PIKO — terkecil, polos; ekspresi lewat 4 set wajah
 piko = O["Piko"]
 pose(piko, 1)
-pose(piko, P04 + 140)
+pose(piko, P04 + 125)
 for i, sudut in enumerate((6, -6, 6, -4)):                # melamun, bergoyang pelan
-    pose(piko, P04 + 160 + i * 25, ry=sudut, rz=10)
+    pose(piko, P04 + 145 + i * 28, ry=sudut, rz=10)
 pose(piko, P05 + 10)
 pose(piko, P05 + 38, rx=-18, rz=-30)
 pose(piko, P05 + 110, rx=-14, rz=-12)
 pose(piko, P06 + 25, dz=0.2)
 pose(piko, P06 + 35)
-pose(piko, P09 + 20)
-pose(piko, P09 + 45, rx=8, s=(1.0, 1.0, 0.93))            # "Kalau nanti dibaca lagi..."
+pose(piko, P09 + 2)
+pose(piko, P09 + 12, rx=8, s=(1.0, 1.0, 0.93))            # "Kalau nanti dibaca lagi..."
 pose(piko, P10 + 4, rx=8, s=(1.0, 1.0, 0.93))
 pose(piko, P10 + 12, dz=0.6, s=(0.85, 0.85, 1.2))
 pose(piko, P10 + 22, s=(1.12, 1.12, 0.88))
@@ -222,11 +297,14 @@ def wajah_piko(f, nama):
     for n, objs in WAJAH.items():
         tampil(objs, f, n == nama)
 
-for f, nama in ((1, "Normal"), (P04 + 160, "Senang"), (P04 + 235, "Sedih"), (P05 + 30, "Normal"),
-                (P06 + 20, "Senang"), (P08, "Normal"), (P09 + 30, "Sedih"), (P10 + 10, "Kaget"),
+for f, nama in ((1, "Normal"), (P04 + 150, "Senang"), (P04 + 213, "Sedih"), (P05 + 30, "Normal"),
+                (P06 + 20, "Senang"), (P08, "Normal"), (P09 + 2, "Sedih"), (P10 + 10, "Kaget"),
                 (P11 + 30, "Senang")):
     wajah_piko(f, nama)
 konstan(sum(WAJAH.values(), []))
+bicara("Piko", P04 + 132, "Iya... dulu tiap habis Subuh ada yang ngaji. Sekarang sepi, cuma detak jam.",
+       laju=5.3, akhir=P05 - 2, kuat=0.8)                 # pelan
+bicara("Piko", P09 + 4, "Kalau nanti dibaca lagi, kita pindah ke mana?", laju=5.3, akhir=P09 + 86, kuat=0.7)  # lirih
 
 # ======================================================================
 # BAYU — pendatang, gerak cepat & memantul
@@ -273,9 +351,13 @@ DASAR["Bayu"] = (x0, y0, rz0 + 1060)
 terbang(bayu, P11 + 30, P12 - 16, JENDELA + Vector((0.5, 0, -0.5)))
 DASAR["Bayu"] = (x0, y0, rz0)
 mulut("Bayu", 1)
-mulut("Bayu", P05 + 100, senang=1.0)
-mulut("Bayu", P07 + 80, kaget=0.8)
+mulut("Bayu", P05 + 30, senang=1.0)
+mulut("Bayu", P07 + 72, kaget=0.6)                         # heran
 mulut("Bayu", P08 + 10)
+bicara("Bayu", P05 + 28, "Assalamu'alaikum... boleh numpang, nggak? Di luar anginnya kencang banget.",
+       laju=6.0, akhir=P06 - 2)
+bicara("Bayu", P07 + 36, "Eh, ini buku apa? Kok ditaruh tinggi banget?", laju=6.0, akhir=P07 + 112, kuat=0.8)
+bicara("Bayu", P08 + 20, "Dihormati... tapi kok nggak pernah dibuka?", laju=5.0, akhir=P08 + 110)  # lalu hening
 mulut("Bayu", P09 + 60, sedih=0.5)
 mulut("Bayu", P10 + 10, kaget=1.0)
 mulut("Bayu", P11 + 30, senang=1.0)
