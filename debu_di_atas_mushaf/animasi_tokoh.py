@@ -1,4 +1,4 @@
-# Animasi tokoh "Debu di Atas Mushaf" sesuai storyboard (12 panel, 24 fps, frame 1-2064).
+# Animasi tokoh "Debu di Atas Mushaf" sesuai storyboard (12 panel, 24 fps, frame 1-2016).
 # Aman dijalankan ulang: animasi tokoh dibersihkan dulu, lalu dikunci ulang.
 # Jalankan: blender -b debu_di_atas_mushaf_lengkap.blend --python animasi_tokoh.py -- debu_di_atas_mushaf_lengkap.blend
 import bpy, math, os, sys
@@ -309,25 +309,38 @@ kunci(pintu, "rotation_euler", 1, 0.0, index=2)
 kunci(pintu, "rotation_euler", P10 + 8, 0.0, index=2)
 kunci(pintu, "rotation_euler", P10 + 70, R(-75), index=2)
 
+# Lengan kanan (dibuat oleh lengan_kanan.py): Empty "Tangan" = pergelangan, armature "Lengan_Kanan" = bahu.
+# Orang berdiri di depan rak menghadap +x, jadi sisi kanannya ada di -y.
 tangan = O["Tangan"]
-tangan.animation_data_clear()
+bahu = O["Lengan_Kanan"]
 mushaf = O["mushaf_tertutup"]
-m0 = mushaf.location.copy()
-def tangan_di(f, p, rz=0):
-    kunci(tangan, "location", f, Vector(p))
-    kunci(tangan, "rotation_euler", f, Vector((0, 0, R(rz))))
-tangan_di(P11, (11.0, -3.0, 23.5), -20)
-tangan_di(P11 + 30, (15.6, -3.0, 21.9), 0)
-for i in range(4):                                         # mengusap sampul dengan kain
-    tangan_di(P11 + 40 + i * 14, (16.6, -4.6 if i % 2 == 0 else -1.4, 21.75), 0)
-tangan_di(P11 + 100, (17.6, -3.0, 21.7), 0)
-tangan_di(P12 - 1, (17.6, -3.0, 23.0), 0)                  # mengangkat mushaf
-for fc_obj in (mushaf,):
-    kunci(mushaf, "location", P11 + 100, m0)
-    kunci(mushaf, "location", P12 - 1, m0 + Vector((0, 0, 1.3)))
+for o in (tangan, bahu, mushaf):
+    o.animation_data_clear()
+m0 = Vector((17.6, -3.0, 20.15))                           # posisi mushaf di rak
+mushaf.location = m0
+BAHU0 = Vector((13.0, -5.8, 16.4))                         # bahu saat berdiri tegak
+JANGKAUAN = 0.93 * 6.6                                     # lengan atas + bawah, sisakan tekukan siku
+def tangan_di(f, p, rz=0, rx=0):
+    p = Vector(p)
+    kunci(tangan, "location", f, p)
+    kunci(tangan, "rotation_euler", f, Vector((R(rx), 0, R(rz))))
+    d = p - BAHU0                                           # condong/jinjit kalau target terlalu jauh
+    kunci(bahu, "location", f, BAHU0 + d.normalized() * (d.length - JANGKAUAN) if d.length > JANGKAUAN else BAHU0)
+tangan_di(P11 - 1, (12.2, -5.0, 17.2), -25)                # di luar frame, di bawah
+tangan_di(P11 + 30, (15.5, -3.2, 21.9), -10)               # meraih sampul dengan kain
+for i in range(4):                                         # mengusap sampul
+    tangan_di(P11 + 38 + i * 12, (16.2, -4.6 if i % 2 == 0 else -1.4, 21.75))
+tangan_di(P11 + 84, (16.2, -3.0, 21.75))                   # selesai mengelap, lalu cut ke panel 12
+tangan_di(P12 - 1, (15.9, -3.0, 22.0))
+lengan = [tangan, bahu] + list(tangan.children_recursive) + list(bahu.children_recursive)
+tampil(lengan, 1, False)                                   # lengan hanya muncul di panel 11
+tampil(lengan, P11 - 1, True)
+tampil(lengan, P12, False)
+konstan(lengan)
 lap = O["lapisan_debu"]
-tampil([lap], P11 + 95, False)                             # debu tersapu bersih
-konstan([lap])
+tampil([lap, O["hitungan_rami"]], P11 + 80, False)        # debu & goresan hitungan tersapu bersih
+tampil([lap, O["hitungan_rami"]], 1, True)
+konstan([lap, O["hitungan_rami"]])
 
 sc.frame_set(1)
 bpy.ops.wm.save_as_mainfile(filepath=OUT)
