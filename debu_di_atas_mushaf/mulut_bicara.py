@@ -64,17 +64,22 @@ def garis_tengah(o, n=16, kunci=None):
     data = kunci.data if kunci else me.vertices
     return [o.matrix_world @ (sum((data[i].co for i in g), Vector()) / len(g)) for g in grup]
 
-def rongga(nama, induk, permukaan, titik, depan, atas, tinggi, celah=0.0, tebal=0.003, ekspresi=None, baris=4):
+def permukaan_di(permukaan, p, depan):
+    """Titik di permukaan `permukaan` searah `depan` dari p (dunia), None kalau meleset."""
+    inv_p = permukaan.matrix_world.inverted()
+    ok, loc, _, _ = permukaan.evaluated_get(dg).ray_cast(inv_p @ (p + depan * 0.3),
+                                                         (inv_p.to_3x3() @ -depan).normalized(), distance=0.6)
+    return permukaan.matrix_world @ loc if ok else None
+
+def rongga(nama, induk, permukaan, titik, depan, atas, tinggi, celah=0.0, tebal=0.003, ekspresi=None,
+           bentuk=None, baris=4):
     """Mesh rongga mulut di bawah garis `titik` (dunia). Basis = terkatup (tinggi 0), "buka" = terbuka.
     Tiap titik diproyeksikan ke `permukaan` sepanjang `depan` supaya menempel di wajah yang melengkung.
-    ekspresi = {nama_key: titik garis untuk key itu} -> rongga ikut berubah bentuk lewat driver."""
-    obj_p = permukaan.evaluated_get(dg)
-    inv_p = permukaan.matrix_world.inverted()
+    ekspresi = {nama_key: titik garis untuk key itu} -> rongga ikut berubah bentuk lewat driver.
+    bentuk = {nama_key: f(t, s) -> titik dunia} -> bentuk bebas (t = kiri-kanan, s = atas-bawah, 0..1)."""
     def tempel(p):
-        asal = inv_p @ (p + depan * 0.3)
-        arah = (inv_p.to_3x3() @ -depan).normalized()
-        ok, loc, nor, _ = obj_p.ray_cast(asal, arah, distance=0.6)
-        return (permukaan.matrix_world @ loc) + depan * tebal if ok else p
+        q = permukaan_di(permukaan, p, depan)
+        return q + depan * tebal if q else p
     N = len(titik)
     def grid(garis, buka):
         hasil = []
@@ -109,6 +114,10 @@ def rongga(nama, induk, permukaan, titik, depan, atas, tinggi, celah=0.0, tebal=
         for d, p0, c0, c1 in zip(kb.data, tutup, [c for c in titik for _ in range(baris + 1)],
                                  [c for c in garis for _ in range(baris + 1)]):
             d.co = inv @ (p0 + (c1 - c0))
+    for k, f in (bentuk or {}).items():
+        kb = o.shape_key_add(name=k, from_mix=False)
+        for d, (i, j) in zip(kb.data, [(i, j) for i in range(N) for j in range(baris + 1)]):
+            d.co = inv @ tempel(f(i / (N - 1), j / baris))
     kb = key_buka(o)
     for d, p in zip(kb.data, grid(titik, 1.0)):
         d.co = inv @ p
@@ -119,10 +128,54 @@ abu_m = O["Abu_mulut"]
 depan = (abu_m.matrix_world.to_3x3() @ Vector((0, -1, 0))).normalized()
 atas = (abu_m.matrix_world.to_3x3() @ Vector((0, 0, 1))).normalized()
 kb = abu_m.data.shape_keys.key_blocks
-ek = {k: garis_tengah(abu_m, kunci=kb[k]) for k in ("senang", "kaget", "sedih")}
+
+# "kaget" lama melintir seperti pita (cincin tabung digeser tanpa diputar). Dibangun ulang:
+# tabung bibir (14 cincin x 4 titik, lokal: x lebar, z atas, y ke belakang) disapu mengikuti
+# lingkaran "O"; penampang tiap cincin diputar mengikuti arah lengkungan supaya tidak terpuntir.
+me = abu_m.data
+CINCIN = len(me.vertices) // 4
+basis = [v.co.copy() for v in kb["Basis"].data]
+pusat_c = [sum(basis[4 * k:4 * k + 4], Vector()) / 4 for k in range(CINCIN)]
+def bingkai(titik, k):
+    """(normal, belakang) penampang cincin ke-k: normal tegak lurus garis di bidang wajah x-z."""
+    a, b = titik[max(k - 1, 0)], titik[min(k + 1, len(titik) - 1)]
+    t = Vector((b.x - a.x, 0, b.z - a.z)).normalized()
+    return Vector((-t.z, 0, t.x)), Vector((0, 1, 0))
+tebal_wajah = []                                   # jarak pusat cincin di depan permukaan wajah
+for c in pusat_c:
+    q = permukaan_di(O["Abu_badan"], abu_m.matrix_world @ c, depan)
+    tebal_wajah.append(((abu_m.matrix_world @ c) - q).dot(depan) if q else 0.0)
+maju = sum(tebal_wajah) / len(tebal_wajah)
+RX, RZ = 0.055, 0.07                               # jari-jari "O" (pusat tabung), lokal Abu_mulut
+CX, CZ = 0.0, sum(c.z for c in pusat_c) / CINCIN - 0.035
+CELAH = math.radians(14)                           # ujung tabung bertemu di atas tanpa saling tembus
+o_baru = []
+for k in range(CINCIN):
+    sudut = math.pi / 2 + CELAH / 2 + (2 * math.pi - CELAH) * k / (CINCIN - 1)
+    p = Vector((CX + RX * math.cos(sudut), 0, CZ + RZ * math.sin(sudut)))   # kiri -> bawah -> kanan
+    q = permukaan_di(O["Abu_badan"], abu_m.matrix_world @ p, depan)
+    if q:                                          # ikuti lengkung wajah, jarak ke wajah sama seperti senyum
+        p = abu_m.matrix_world.inverted() @ (q + depan * maju)
+    o_baru.append(p)
+kaget = kb["kaget"]
+for k in range(CINCIN):
+    n0, y0 = bingkai(pusat_c, k)
+    n1, y1 = bingkai(o_baru, k)
+    for i in range(4 * k, 4 * k + 4):
+        off = basis[i] - pusat_c[k]
+        kaget.data[i].co = o_baru[k] + n1 * off.dot(n0) + y1 * off.dot(y0)
+
+def isi_o(t, s):
+    """Bagian dalam "O" untuk rongga: t kiri-kanan, s atas-bawah."""
+    rx, rz = RX - 0.012, RZ - 0.012
+    x = CX + (2 * t - 1) * rx
+    h = rz * math.sqrt(max(0.0, 1 - ((x - CX) / rx) ** 2))
+    return abu_m.matrix_world @ Vector((x, 0, CZ + h - 2 * h * s))
+
+ek = {k: garis_tengah(abu_m, kunci=kb[k]) for k in ("senang", "sedih")}
 r = rongga("Abu_mulut_Rongga", abu_m, O["Abu_badan"], garis_tengah(abu_m, kunci=kb["Basis"]), depan, atas,
-           tinggi=0.095, celah=0.006, ekspresi=ek)
-for k in ek:
+           tinggi=0.095, celah=0.006, ekspresi=ek, bentuk={"kaget": isi_o})
+for k in ("senang", "kaget", "sedih"):
     sambung(abu_m.data.shape_keys, k, r.data.shape_keys)
 
 # ---------- RAMI: mulut bergelombang dilukis di tekstur; garisnya dilacak dari render close-up ----------
