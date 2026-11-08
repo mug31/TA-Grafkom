@@ -72,7 +72,7 @@ def permukaan_di(permukaan, p, depan):
     return permukaan.matrix_world @ loc if ok else None
 
 def rongga(nama, induk, permukaan, titik, depan, atas, tinggi, celah=0.0, tebal=0.003, ekspresi=None,
-           bentuk=None, baris=4):
+           bentuk=None, baris=4, profil=0.7):
     """Mesh rongga mulut di bawah garis `titik` (dunia). Basis = terkatup (tinggi 0), "buka" = terbuka.
     Tiap titik diproyeksikan ke `permukaan` sepanjang `depan` supaya menempel di wajah yang melengkung.
     ekspresi = {nama_key: titik garis untuk key itu} -> rongga ikut berubah bentuk lewat driver.
@@ -85,7 +85,7 @@ def rongga(nama, induk, permukaan, titik, depan, atas, tinggi, celah=0.0, tebal=
         hasil = []
         for i, c in enumerate(garis):
             t = i / (N - 1)
-            dalam = tinggi * math.sin(math.pi * t) ** 0.7 * buka
+            dalam = tinggi * math.sin(math.pi * t) ** profil * buka
             for j in range(baris + 1):
                 hasil.append(tempel(c - atas * (celah + dalam * j / baris)))
         return hasil
@@ -122,6 +122,24 @@ def rongga(nama, induk, permukaan, titik, depan, atas, tinggi, celah=0.0, tebal=
     for d, p in zip(kb.data, grid(titik, 1.0)):
         d.co = inv @ p
     return o
+
+def bibir_turun(m, r, permukaan, depan, atas, tinggi, celah, profil=0.7):
+    """Garis bibir `m` ikut membuka sebagai bibir bawah: tiap titik turun mengikuti dasar rongga `r`
+    (tinggi x sin^profil sepanjang lebar mulut) dan tetap menempel di lengkung wajah. Digerakkan driver
+    dari key "buka" rongga, jadi animasi bicara cukup mengunci rongganya saja."""
+    kb = key_buka(m)
+    basis = [d.co.copy() for d in m.data.shape_keys.key_blocks["Basis"].data]
+    x0, x1 = min(c.x for c in basis), max(c.x for c in basis)
+    inv = m.matrix_world.inverted()
+    for d, co in zip(kb.data, basis):
+        t = (co.x - x0) / (x1 - x0)
+        p = m.matrix_world @ co
+        p2 = p - atas * max(0.0, celah + tinggi * math.sin(math.pi * max(0.0, min(1.0, t))) ** profil)
+        q0, q1 = permukaan_di(permukaan, p, depan), permukaan_di(permukaan, p2, depan)
+        if q0 and q1:
+            p2 += depan * (q1 - q0).dot(depan)
+        d.co = inv @ p2
+    sambung(r.data.shape_keys, "buka", m.data.shape_keys)
 
 # ---------- ABU: garis senyum merah + rongga di bawahnya, ikut ekspresi senang/kaget/sedih ----------
 abu_m = O["Abu_mulut"]
@@ -174,9 +192,10 @@ def isi_o(t, s):
 
 ek = {k: garis_tengah(abu_m, kunci=kb[k]) for k in ("senang", "sedih")}
 r = rongga("Abu_mulut_Rongga", abu_m, O["Abu_badan"], garis_tengah(abu_m, kunci=kb["Basis"]), depan, atas,
-           tinggi=0.095, celah=0.006, ekspresi=ek, bentuk={"kaget": isi_o})
+           tinggi=0.095, celah=-0.008, ekspresi=ek, bentuk={"kaget": isi_o})   # celah < 0: rongga mulai dari bibir
 for k in ("senang", "kaget", "sedih"):
     sambung(abu_m.data.shape_keys, k, r.data.shape_keys)
+bibir_turun(abu_m, r, O["Abu_badan"], depan, atas, tinggi=0.095, celah=-0.008)
 
 # ---------- RAMI: mulut bergelombang dilukis di tekstur; garisnya dilacak dari render close-up ----------
 # (koordinat lokal Rami_Badan, kiri -> kanan, sepanjang garis cokelat tua di tekstur)
@@ -195,9 +214,10 @@ rongga("Rami_mulut_Rongga", rb, rb, [rb.matrix_world @ Vector(p) for p in RAMI_G
 badan = O["Piko_Badan"]
 depan = (badan.matrix_world.to_3x3() @ Vector((0, -1, 0))).normalized()
 atas = (badan.matrix_world.to_3x3() @ Vector((0, 0, 1))).normalized()
-for n in ("Piko_Senang_Mulut", "Piko_Sedih_Mulut"):        # garis senyum / cemberut hitam
-    m = O[n]
-    rongga(n + "_Rongga", m, badan, garis_tengah(m, n=14), depan, atas, tinggi=0.11, celah=0.012)
+for n, profil in (("Piko_Senang_Mulut", 0.7), ("Piko_Sedih_Mulut", 0.25)):   # garis senyum / cemberut hitam
+    m = O[n]                                       # cemberut turun hampir sejajar supaya tetap cemberut
+    r = rongga(n + "_Rongga", m, badan, garis_tengah(m, n=14), depan, atas, tinggi=0.11, celah=0.012, profil=profil)
+    bibir_turun(m, r, badan, depan, atas, tinggi=0.11, celah=0.012, profil=profil)
 for set_ in ("Normal", "Kaget"):                           # mulut "o": memanjang ke bawah
     bibir, isi = O[f"Piko_{set_}_Mulut_1_BibirHitam"], O[f"Piko_{set_}_Mulut_2_RonggaMarun"]
     titik = [bibir.matrix_world @ v.co for v in bibir.data.vertices]
