@@ -15,9 +15,11 @@ O = bpy.data.objects
 P = {m.name: m.frame for m in sc.timeline_markers}
 P10, P11 = P["P10"], P["P11"]
 
-X = -12.3                    # tengah bukaan pintu (kusen x -17,6..-8,4), sedikit ke kanan dari daun pintu
-Y_BERDIRI = 7.8              # tepat di balik kusen (y 5), cukup jauh dari cahaya_pintu (y 12) agar tak menutupinya
-BELOK = 60.0                 # saat mulai jalan berbelok ke arah rak mushaf (kanan kamera)
+X = -12.3                    # tengah bukaan pintu (sisi dalam kusen x -17..-9), menjauhi daun pintu yang terbuka miring
+Y_BERDIRI = 9.5              # di lorong, di balik kusen (y 5), masih di depan cahaya_pintu (y 12)
+BELOK = 80.0                 # setelah lewat pintu berbelok ke arah mushaf, berhenti tepat sebelum rehal
+LURUS = 6.2                  # jarak lurus dulu sampai badan keluar dari bukaan pintu (dinding y 5..5,5)
+JARI = 3.0                   # jari-jari belokan
 MULAI_JALAN = P10 + 92       # setelah pintu terbuka penuh (P10+70) dan para debu terkejut
 SIKLUS = 32                  # frame per siklus jalan Mixamo (2 langkah)
 LANGKAH = 16.0               # jarak tempuh per siklus (unit = 10 cm)
@@ -117,18 +119,34 @@ bpy.context.view_layer.update()
 dg = bpy.context.evaluated_depsgraph_get()
 bawah = min((o.evaluated_get(dg).matrix_world @ Vector(c)).z for o in bagian for c in o.evaluated_get(dg).bound_box)
 akar.location.z -= bawah
-arah = Vector((math.sin(math.radians(BELOK)), -math.cos(math.radians(BELOK)), 0))  # hadap -y diputar BELOK
+# Lintasan: lurus keluar dari bukaan pintu dulu (melewati dinding y 5), baru berbelok melengkung
+# ke kanan kamera. Kalau langsung miring sejak di lorong, badan menembus dinding sebelah kusen.
 awal = Vector((X, Y_BERDIRI, akar.location.z))
-for f, p in ((P10, awal), (MULAI_JALAN, awal), (MULAI_JALAN + SIKLUS, awal + arah * LANGKAH)):
+def lintasan(s):
+    """posisi & arah hadap (derajat) setelah menempuh jarak s"""
+    p, th, ds = awal.copy(), 0.0, 0.02
+    t = 0.0
+    while t < s - 1e-9:
+        d = min(ds, s - t)
+        if t >= LURUS:
+            th = min(BELOK, math.degrees((t - LURUS) / JARI)) if t < LURUS + math.radians(BELOK) * JARI else BELOK
+        r = math.radians(th)
+        p += Vector((math.sin(r), -math.cos(r), 0)) * d
+        t += d
+    return p, th
+akar.location = awal
+akar.keyframe_insert("location", frame=P10)
+akar.rotation_euler = (0, 0, 0)
+akar.keyframe_insert("rotation_euler", index=2, frame=P10)
+for i in range(SIKLUS + 1):
+    p, th = lintasan(LANGKAH * i / SIKLUS)
     akar.location = p
-    akar.keyframe_insert("location", frame=f)
-for f, r in ((P10, 0.0), (MULAI_JALAN, 0.0), (MULAI_JALAN + 10, BELOK)):
-    akar.rotation_euler = (0, 0, math.radians(r))
-    akar.keyframe_insert("rotation_euler", index=2, frame=f)
+    akar.rotation_euler = (0, 0, math.radians(th))
+    akar.keyframe_insert("location", frame=MULAI_JALAN + i)
+    akar.keyframe_insert("rotation_euler", index=2, frame=MULAI_JALAN + i)
 for fc in fcurves(akar.animation_data.action):
-    if fc.data_path == "location":
-        for k in fc.keyframe_points:
-            k.interpolation = 'LINEAR'
+    for k in fc.keyframe_points:
+        k.interpolation = 'LINEAR'
 
 # ---------- hitam pekat ----------
 mat = bpy.data.materials.get("Mat_Siluet") or bpy.data.materials.new("Mat_Siluet")
