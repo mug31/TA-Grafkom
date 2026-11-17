@@ -168,7 +168,7 @@ arah.empty_display_size = 0.3
 pole = O.new("Lengan_Pole", None)
 koleksi.objects.link(pole)
 pole.parent = rig
-pole.location = (-1.5, -3.5, -2.5)
+pole.location = (-1.0, -3.5, 0.0)                     # siku ke samping luar, tidak menembus rak
 pole.empty_display_size = 0.3
 
 pb = rig.pose.bones
